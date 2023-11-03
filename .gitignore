@@ -4,7 +4,12 @@
 
 *.out
 *.converted
+*.txt
+!NOTICE.txt
 tmp*
+
+# Test archive files
+*.zip
 
 # vscode config
 /.vscode/

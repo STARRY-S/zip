@@ -32,7 +32,7 @@ type Writer struct {
 
 type header struct {
 	*FileHeader
-	offset uint64
+	offset int64
 	raw    bool
 }
 
@@ -109,7 +109,7 @@ func (w *Writer) Close() error {
 			eb.uint16(24) // size = 3x uint64
 			eb.uint64(h.UncompressedSize64)
 			eb.uint64(h.CompressedSize64)
-			eb.uint64(h.offset)
+			eb.uint64(uint64(h.offset))
 			h.Extra = append(h.Extra, buf[:]...)
 		} else {
 			b.uint32(h.CompressedSize)
@@ -331,7 +331,7 @@ func (w *Writer) CreateHeader(fh *FileHeader) (io.Writer, error) {
 	)
 	h := &header{
 		FileHeader: fh,
-		offset:     uint64(w.cw.count),
+		offset:     w.cw.count,
 	}
 
 	if strings.HasSuffix(fh.Name, "/") {
@@ -445,7 +445,7 @@ func (w *Writer) CreateRaw(fh *FileHeader) (io.Writer, error) {
 
 	h := &header{
 		FileHeader: fh,
-		offset:     uint64(w.cw.count),
+		offset:     w.cw.count,
 		raw:        true,
 	}
 	w.dir = append(w.dir, h)
