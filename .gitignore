@@ -1,0 +1,14 @@
+# binary files
+/bin/
+/dist/
+
+*.out
+*.converted
+tmp*
+
+# vscode config
+/.vscode/
+
+# macOS trash
+.DS_Store
+._.DS_Store
