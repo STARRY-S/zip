@@ -1,3 +1,24 @@
+// Copyright 2010 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+/*
+Package zip provides support for reading and writing ZIP archives.
+
+See the [ZIP specification] for details.
+
+This package does not support disk spanning.
+
+A note about ZIP64:
+
+To be backwards compatible the FileHeader has both 32 and 64 bit Size
+fields. The 64 bit fields will always contain the correct value and
+for normal archives both fields will be the same. For files requiring
+the ZIP64 format the 32 bit fields will be 0xffffffff and the 64 bit
+fields must be used instead.
+
+[ZIP specification]: https://www.pkware.com/appnote
+*/
 package zip
 
 import (

@@ -1,3 +1,7 @@
+// Copyright 2010 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package zip
 
 import (
@@ -6,15 +10,19 @@ import (
 	"errors"
 	"hash"
 	"hash/crc32"
+
+	// "internal/godebug"
 	"io"
 	"io/fs"
+	"os"
 	"path"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 )
+
+// var zipinsecurepath = godebug.New("zipinsecurepath")
 
 var (
 	ErrFormat       = errors.New("zip: not a valid zip file")
@@ -23,6 +31,7 @@ var (
 	ErrInsecurePath = errors.New("zip: insecure file path")
 )
 
+// A Reader serves content from a ZIP archive.
 type Reader struct {
 	r             io.ReaderAt
 	File          []*File
@@ -39,6 +48,12 @@ type Reader struct {
 	fileList     []fileListEntry
 }
 
+// A ReadCloser is a Reader that must be closed when no longer needed.
+type ReadCloser struct {
+	f *os.File
+	Reader
+}
+
 // A File is a single file in a ZIP archive.
 // The file information is in the embedded FileHeader.
 // The file content can be accessed by calling Open.
@@ -48,6 +63,34 @@ type File struct {
 	zipr         io.ReaderAt
 	headerOffset int64 // includes overall ZIP archive baseOffset
 	zip64        bool  // zip64 extended information extra field presence
+}
+
+// OpenReader will open the Zip file specified by name and return a ReadCloser.
+//
+// If any file inside the archive uses a non-local name
+// (as defined by [filepath.IsLocal]) or a name containing backslashes
+// and the GODEBUG environment variable contains `zipinsecurepath=0`,
+// OpenReader returns the reader with an ErrInsecurePath error.
+// A future version of Go may introduce this behavior by default.
+// Programs that want to accept non-local names can ignore
+// the ErrInsecurePath error and use the returned reader.
+func OpenReader(name string) (*ReadCloser, error) {
+	f, err := os.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	r := new(ReadCloser)
+	if err = r.init(f, fi.Size()); err != nil && err != ErrInsecurePath {
+		f.Close()
+		return nil, err
+	}
+	r.f = f
+	return r, err
 }
 
 // NewReader returns a new Reader reading from r, which is assumed to
@@ -116,19 +159,31 @@ func (r *Reader) init(rdr io.ReaderAt, size int64) error {
 		// the wrong number of directory entries.
 		return err
 	}
-	for _, f := range r.File {
-		if f.Name == "" {
-			// Zip permits an empty file name field.
-			continue
-		}
-		// The zip specification states that names must use forward slashes,
-		// so consider any backslashes in the name insecure.
-		if !filepath.IsLocal(f.Name) || strings.Contains(f.Name, "\\") {
-			// zipinsecurepath.IncNonDefault()
-			return ErrInsecurePath
-		}
-	}
+	// if zipinsecurepath.Value() == "0" {
+	// 	for _, f := range r.File {
+	// 		if f.Name == "" {
+	// 			// Zip permits an empty file name field.
+	// 			continue
+	// 		}
+	// 		// The zip specification states that names must use forward slashes,
+	// 		// so consider any backslashes in the name insecure.
+	// 		if !filepath.IsLocal(f.Name) || strings.Contains(f.Name, `\`) {
+	// 			zipinsecurepath.IncNonDefault()
+	// 			return ErrInsecurePath
+	// 		}
+	// 	}
+	// }
 	return nil
+}
+
+// RegisterDecompressor registers or overrides a custom decompressor for a
+// specific method ID. If a decompressor for a given method is not found,
+// Reader will default to looking up the decompressor at the package level.
+func (r *Reader) RegisterDecompressor(method uint16, dcomp Decompressor) {
+	if r.decompressors == nil {
+		r.decompressors = make(map[uint16]Decompressor)
+	}
+	r.decompressors[method] = dcomp
 }
 
 func (r *Reader) decompressor(method uint16) Decompressor {
@@ -137,6 +192,11 @@ func (r *Reader) decompressor(method uint16) Decompressor {
 		dcomp = decompressor(method)
 	}
 	return dcomp
+}
+
+// Close closes the Zip file, rendering it unusable for I/O.
+func (rc *ReadCloser) Close() error {
+	return rc.f.Close()
 }
 
 // DataOffset returns the offset of the file's possibly-compressed
@@ -150,10 +210,6 @@ func (f *File) DataOffset() (offset int64, err error) {
 		return
 	}
 	return f.headerOffset + bodyOffset, nil
-}
-
-func (f *File) HeaderOffset() (offset int64, err error) {
-	return f.headerOffset, nil
 }
 
 // Open returns a ReadCloser that provides access to the File's contents.

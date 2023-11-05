@@ -1,22 +1,81 @@
 package zip
 
 import (
-	"bufio"
 	"errors"
-	"fmt"
 	"hash/crc32"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 )
 
+// sectionReaderWriter implements io.Reader, io.Writer, io.Seeker, io.ReaderAt,
+// io.WriterAt interfaces based on io.ReadWriteSeeker.
+type sectionReaderWriter struct {
+	rws io.ReadWriteSeeker
+}
+
+func newSectionReaderWriter(rws io.ReadWriteSeeker) *sectionReaderWriter {
+	return &sectionReaderWriter{
+		rws: rws,
+	}
+}
+
+func (s *sectionReaderWriter) ReadAt(p []byte, offset int64) (int, error) {
+	currOffset, err := s.rws.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return 0, err
+	}
+	defer s.rws.Seek(currOffset, io.SeekStart)
+	_, err = s.rws.Seek(offset, io.SeekStart)
+	if err != nil {
+		return 0, err
+	}
+	return s.rws.Read(p)
+}
+
+func (s *sectionReaderWriter) WriteAt(p []byte, offset int64) (n int, err error) {
+	currOffset, err := s.rws.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return 0, err
+	}
+	defer s.rws.Seek(currOffset, io.SeekStart)
+	_, err = s.rws.Seek(offset, io.SeekStart)
+	if err != nil {
+		return 0, err
+	}
+	return s.rws.Write(p)
+}
+
+func (s *sectionReaderWriter) Seek(offset int64, whence int) (int64, error) {
+	return s.rws.Seek(offset, whence)
+}
+
+func (s *sectionReaderWriter) Read(p []byte) (n int, err error) {
+	return s.rws.Read(p)
+}
+
+func (s *sectionReaderWriter) Write(p []byte) (n int, err error) {
+	return s.rws.Write(p)
+}
+
+func (s *sectionReaderWriter) offset() (int64, error) {
+	return s.rws.Seek(0, io.SeekCurrent)
+}
+
+type Directory struct {
+	FileHeader
+	offset int64 // header offset
+}
+
+func (d *Directory) HeaderOffset() int64 {
+	return d.offset
+}
+
 // Updater allows to modify & append files into an existing zip archive without
 // decompress the whole file.
 type Updater struct {
-	f           *os.File
-	fi          os.FileInfo
-	cw          *countWriter
+	rw          *sectionReaderWriter
+	offset      int64
 	dir         []*header
 	last        *fileWriter
 	closed      bool
@@ -30,35 +89,24 @@ type Updater struct {
 	dirOffset int64
 }
 
-func OpenUpdater(name string) (*Updater, error) {
-	// Open an existing zip archive file.
-	file, err := os.OpenFile(name, os.O_RDWR, 0)
-	if err != nil {
+// NewReader returns a new Updater from io.ReadWriteSeeker, which is assumed to
+// have the given size in bytes.
+func NewUpdater(rws io.ReadWriteSeeker, size int64) (*Updater, error) {
+	if size < 0 {
+		return nil, errors.New("zip: size can not be negative")
+	}
+	zu := &Updater{
+		rw: newSectionReaderWriter(rws),
+	}
+	var err error
+	if err = zu.init(size); err != nil && err != ErrInsecurePath {
 		return nil, err
 	}
-	fi, err := os.Stat(name)
-	if err != nil {
-		return nil, err
-	}
-
-	u := &Updater{
-		f:  file,
-		fi: fi,
-		cw: &countWriter{
-			w:     file,
-			count: 0,
-		},
-	}
-	if err = u.init(); err != nil {
-		return nil, err
-	}
-
-	return u, nil
+	return zu, nil
 }
 
-func (u *Updater) init() error {
-	size := u.fi.Size()
-	end, baseOffset, err := readDirectoryEnd(u.f, size)
+func (u *Updater) init(size int64) error {
+	end, baseOffset, err := readDirectoryEnd(u.rw, size)
 	if err != nil {
 		return err
 	}
@@ -74,18 +122,17 @@ func (u *Updater) init() error {
 		u.dir = make([]*header, 0, end.directoryRecords)
 	}
 	u.comment = end.comment
-	if _, err = u.f.Seek(u.baseOffset+int64(end.directoryOffset), io.SeekStart); err != nil {
+	if _, err = u.rw.Seek(u.baseOffset+int64(end.directoryOffset), io.SeekStart); err != nil {
 		return err
 	}
-	buf := bufio.NewReader(u.f)
 
 	// The count of files inside a zip is truncated to fit in a uint16.
 	// Gloss over this by reading headers until we encounter
 	// a bad one, and then only report an ErrFormat or UnexpectedEOF if
 	// the file count modulo 65536 is incorrect.
 	for {
-		f := &File{zip: nil, zipr: u.f}
-		err = readDirectoryHeader(f, buf)
+		f := &File{zip: nil, zipr: u.rw}
+		err = readDirectoryHeader(f, u.rw)
 		if err == ErrFormat || err == io.ErrUnexpectedEOF {
 			break
 		}
@@ -95,7 +142,7 @@ func (u *Updater) init() error {
 		f.headerOffset += u.baseOffset
 		h := &header{
 			FileHeader: &f.FileHeader,
-			offset:     f.headerOffset,
+			offset:     uint64(f.headerOffset),
 		}
 		u.dir = append(u.dir, h)
 	}
@@ -118,51 +165,15 @@ func (u *Updater) init() error {
 	return nil
 }
 
-func (u *Updater) Ls() {
+func (u *Updater) Directory() []Directory {
+	dir := make([]Directory, 0, len(u.dir))
 	for _, d := range u.dir {
-		fmt.Printf("  %v %v - offset %v\n",
-			d.Mode(), d.Name, d.offset)
+		dir = append(dir, Directory{
+			FileHeader: *d.FileHeader,
+			offset:     int64(d.offset),
+		})
 	}
-}
-
-func (u *Updater) LastHeaderOffset() (int64, error) {
-	if len(u.dir) == 0 {
-		return 0, ErrFormat
-	}
-	return u.dir[len(u.dir)-1].offset, nil
-}
-
-func (u *Updater) LastFileOffset() (start, size int64, err error) {
-	if len(u.dir) == 0 {
-		return 0, 0, ErrFormat
-	}
-	h := u.dir[len(u.dir)-1]
-	var buf []byte = make([]byte, fileHeaderLen)
-	if _, err := u.f.ReadAt(buf, int64(h.offset)); err != nil {
-		return 0, 0, err
-	}
-	b := readBuf(buf)
-	if sig := b.uint32(); sig != fileHeaderSignature {
-		return 0, 0, ErrFormat
-	}
-	b = b[14:] // skip over most of the header
-	compressedSize := b.uint32()
-	b.uint32() // skip uncompressed size
-	filenameLen := b.uint16()
-	extraLen := b.uint16()
-	return h.offset + int64(fileHeaderLen+filenameLen+extraLen), int64(compressedSize), err
-}
-
-func (u *Updater) DirOffset() (int64, error) {
-	return u.dirOffset, nil
-}
-
-func (u *Updater) AppendAt(name string, offset int64) (io.Writer, error) {
-	h := &FileHeader{
-		Name:   name,
-		Method: Deflate,
-	}
-	return u.AppendHeaderAt(h, offset)
+	return dir
 }
 
 // Append adds a file to the zip file using the provided name.
@@ -173,20 +184,41 @@ func (u *Updater) AppendAt(name string, offset int64) (io.Writer, error) {
 // allowed. To create a directory instead of a file, add a trailing
 // slash to the name.
 // The file's contents must be written to the io.Writer before the next
-// call to Create, CreateHeader, or Close.
+// call to Append, AppendHeader, or Close.
 func (u *Updater) Append(name string) (io.Writer, error) {
 	h := &FileHeader{
 		Name:   name,
 		Method: Deflate,
 	}
-	return u.AppendHeaderAt(h, u.dirOffset)
+	return u.AppendHeaderAt(h, -1)
 }
 
-func (u *Updater) prepare(fh *FileHeader) error {
+// AppendAt adds a file to the zip file to specific offset.
+// If the offset is less than 0, data will be appended after the last file
+// in the zip archive.
+// It should be noted that the size of the newly appended file should be larger
+// than the size of the existing file.
+// Especially when using the Deflate compression method, the compressed
+// data size should be larger than the original file data size.
+func (u *Updater) AppendAt(name string, offset int64) (io.Writer, error) {
+	h := &FileHeader{
+		Name:   name,
+		Method: Deflate,
+	}
+	return u.AppendHeaderAt(h, offset)
+}
+
+func (u *Updater) prepare(fh *FileHeader, offset int64) error {
 	if u.last != nil && !u.last.closed {
 		if err := u.last.close(); err != nil {
 			return err
 		}
+		// update the dirOffset
+		dirOffset, err := u.rw.offset()
+		if err != nil {
+			return err
+		}
+		u.dirOffset = dirOffset
 	}
 	if len(u.dir) > 0 && u.dir[len(u.dir)-1].FileHeader == fh {
 		// See https://golang.org/issue/11144 confusion.
@@ -196,19 +228,45 @@ func (u *Updater) prepare(fh *FileHeader) error {
 }
 
 // AppendHeaderAt adds a file to the zip archive using the provided FileHeader
-// for the file metadata. Writer takes ownership of fh and may mutate
-// its fields. The caller must not modify fh after calling CreateHeader.
+// for the file metadata to the specific offset.
+// Writer takes ownership of fh and may mutate its fields.
+// The caller must not modify fh after calling CreateHeader.
+//
+// If the offset is less than 0, data will be appended after the last file
+// in the zip archive.
+//
+// It should be noted that the size of the newly appended file should be larger
+// than the size of the existing file. Especially when using the Deflate
+// compression method, the compressed data size should be larger than the
+// original file data size.
 func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error) {
-	if err := u.prepare(fh); err != nil {
+	if err := u.prepare(fh, offset); err != nil {
 		return nil, err
 	}
 
+	if offset < 0 {
+		offset = u.dirOffset
+	}
+	// Offset should match existing header offsets or equal to directory offset.
+	var offsetExists bool
+	for i, h := range u.dir {
+		if h.offset == uint64(offset) {
+			offsetExists = true
+			// Delete the corresponding header.
+			u.dir = append(u.dir[:i], u.dir[i+1:]...)
+			break
+		}
+	}
+	if !offsetExists && offset != u.dirOffset {
+		return nil, errors.New("archive/zip: invalid header offset provided")
+	}
+
 	// Seek the file offset.
-	_, err := u.f.Seek(offset, io.SeekStart)
+	_, err := u.rw.Seek(offset, io.SeekStart)
 	if err != nil {
 		return nil, err
 	}
-	u.cw.count = offset
+	u.offset = offset
 
 	// The ZIP format has a sad state of affairs regarding character encoding.
 	// Officially, the name and comment fields are supposed to be encoded
@@ -272,7 +330,7 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 	)
 	h := &header{
 		FileHeader: fh,
-		offset:     u.cw.count,
+		offset:     uint64(u.offset),
 	}
 	if strings.HasSuffix(fh.Name, "/") {
 		// Set the compression method to Store to ensure data length is truly zero,
@@ -293,8 +351,8 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 		fh.Flags |= 0x8 // we will write a data descriptor
 
 		fw = &fileWriter{
-			zipw:      u.cw,
-			compCount: &countWriter{w: u.cw},
+			zipw:      u.rw,
+			compCount: &countWriter{w: u.rw},
 			crc32:     crc32.NewIEEE(),
 		}
 		comp := u.compressor(fh.Method)
@@ -311,11 +369,16 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 		ow = fw
 	}
 	u.dir = append(u.dir, h)
-	if err := writeHeader(u.cw, h); err != nil {
+	if err := writeHeader(u.rw, h); err != nil {
 		return nil, err
 	}
 	// If we're creating a directory, fw is nil.
 	u.last = fw
+	u.dirOffset, err = u.rw.offset()
+	if err != nil {
+		return nil, err
+	}
+
 	return ow, nil
 }
 
@@ -325,10 +388,6 @@ func (u *Updater) compressor(method uint16) Compressor {
 		comp = compressor(method)
 	}
 	return comp
-}
-
-func (u *Updater) Flush() error {
-	return u.f.Sync()
 }
 
 func (u *Updater) SetComment(comment string) error {
@@ -356,7 +415,10 @@ func (u *Updater) Close() error {
 	u.closed = true
 
 	// write central directory
-	start := u.cw.count
+	start, err := u.rw.offset()
+	if err != nil {
+		return err
+	}
 	for _, h := range u.dir {
 		var buf []byte = make([]byte, directoryHeaderLen)
 		b := writeBuf(buf)
@@ -399,20 +461,23 @@ func (u *Updater) Close() error {
 		} else {
 			b.uint32(uint32(h.offset))
 		}
-		if _, err := u.cw.Write(buf); err != nil {
+		if _, err := u.rw.Write(buf); err != nil {
 			return err
 		}
-		if _, err := io.WriteString(u.cw, h.Name); err != nil {
+		if _, err := io.WriteString(u.rw, h.Name); err != nil {
 			return err
 		}
-		if _, err := u.cw.Write(h.Extra); err != nil {
+		if _, err := u.rw.Write(h.Extra); err != nil {
 			return err
 		}
-		if _, err := io.WriteString(u.cw, h.Comment); err != nil {
+		if _, err := io.WriteString(u.rw, h.Comment); err != nil {
 			return err
 		}
 	}
-	end := u.cw.count
+	end, err := u.rw.offset()
+	if err != nil {
+		return err
+	}
 
 	records := uint64(len(u.dir))
 	size := uint64(end - start)
@@ -440,7 +505,7 @@ func (u *Updater) Close() error {
 		b.uint64(uint64(end)) // relative offset of the zip64 end of central directory record
 		b.uint32(1)           // total number of disks
 
-		if _, err := u.cw.Write(buf[:]); err != nil {
+		if _, err := u.rw.Write(buf[:]); err != nil {
 			return err
 		}
 
@@ -461,12 +526,12 @@ func (u *Updater) Close() error {
 	b.uint32(uint32(size))           // size of directory
 	b.uint32(uint32(offset))         // start of directory
 	b.uint16(uint16(len(u.comment))) // byte size of EOCD comment
-	if _, err := u.cw.Write(buf[:]); err != nil {
+	if _, err := u.rw.Write(buf[:]); err != nil {
 		return err
 	}
-	if _, err := io.WriteString(u.cw, u.comment); err != nil {
+	if _, err := io.WriteString(u.rw, u.comment); err != nil {
 		return err
 	}
 
-	return u.f.Close()
+	return nil
 }

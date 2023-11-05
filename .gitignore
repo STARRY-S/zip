@@ -1,7 +1,4 @@
-# binary files
-/bin/
-/dist/
-
+# Generated files
 *.out
 *.converted
 *.txt
@@ -11,7 +8,7 @@ tmp*
 # Test archive files
 *.zip
 
-# vscode config
+# VSCode config
 /.vscode/
 
 # macOS trash
