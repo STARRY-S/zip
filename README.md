@@ -5,6 +5,38 @@ This project is based on the [archive/zip](https://github.com/golang/go/tree/mas
 
 > **Not stable to use in production yet!**
 
+Usage
+-----
+
+```go
+import "github.com/STARRY-S/zip"
+```
+
+```go
+// Open an existing test.zip archive with read/write only mode for Updater.
+f, err := os.OpenFile("test.zip", os.O_RDWR, 0)
+handleErr(err)
+fi, err := f.Stat()
+handleErr(err)
+zu, err := zip.NewUpdater(f, fi.Size())
+handleErr(err)
+defer zu.Close()
+
+// Updater supports modify the zip comment.
+err = zu.SetComment("Test update zip archive")
+handleErr(err)
+
+// Append a new file into existing archive.
+// The Append method will create a new io.Writer.
+w, err := zu.Append("example.txt")
+handleErr(err)
+// Write data into writer.
+_, err = w.Write([]byte("hello world"))
+handleErr(err)
+```
+
+The completed example test code: [example_updater_test.go](./example_updater_test.go).
+
 License
 -------
 

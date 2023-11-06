@@ -1,7 +1,6 @@
 package zip_test
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"testing"
@@ -27,6 +26,7 @@ func append(u *zip.Updater, name string) {
 	handleErr(err)
 	f, err := os.Open(name)
 	handleErr(err)
+	defer f.Close()
 	_, err = io.Copy(w, f)
 	handleErr(err)
 }
@@ -47,16 +47,25 @@ func Test_Updater(t *testing.T) {
 	_, err = io.Copy(w, t1)
 	handleErr(err)
 	t.Log("write 'LICENSE' file into test.zip")
+	// Write comment
+	err = zw.SetComment("Test create ZIP Archive")
+	handleErr(err)
 	t.Log("---------------------")
+	// Finished create zip file.
 	t1.Close()
 	zw.Close()
+	f.Close()
 
-	// Reopen test.zip archive with read/write only mode.
+	// Reopen test.zip archive with read/write only mode for Updater.
 	f, err = os.OpenFile("test.zip", os.O_RDWR, 0)
 	handleErr(err)
 	fi, err := f.Stat()
 	handleErr(err)
 	zu, err := zip.NewUpdater(f, fi.Size())
+	handleErr(err)
+
+	// Modift the zip comment
+	err = zu.SetComment("Test update zip archive")
 	handleErr(err)
 
 	// Show current files in archive index.
@@ -120,19 +129,23 @@ func Test_Updater(t *testing.T) {
 
 	zu.Close()
 
-	// Finally, re-open the zip archive by Reader.
+	// Finally, re-open the zip archive by Reader to validate.
 	zr, err := zip.OpenReader("test.zip")
 	handleErr(err)
-	defer zr.Close()
 
+	t.Logf("modified zip archive comment: %v", zr.Comment)
 	t.Logf("modified zip archive directory:")
-	buf := make([]byte, 30)
+	buf := make([]byte, 10)
 	for _, f := range zr.File {
 		t.Logf("%s %s", f.Mode(), f.Name)
 		rc, err := f.Open()
 		handleErr(err)
 		_, err = rc.Read(buf)
 		handleErr(err)
-		fmt.Printf("content (pre 30 Bytes): %v\n", string(buf))
+		t.Logf("content (pre 30 Bytes): %v...n", string(buf))
 	}
+	zr.Close()
+
+	// Clean-up test zip file.
+	os.Remove("test.zip")
 }
