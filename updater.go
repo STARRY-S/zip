@@ -91,14 +91,14 @@ type Updater struct {
 
 // NewReader returns a new Updater from io.ReadWriteSeeker, which is assumed to
 // have the given size in bytes.
-func NewUpdater(rws io.ReadWriteSeeker, size int64) (*Updater, error) {
-	if size < 0 {
-		return nil, errors.New("zip: size can not be negative")
+func NewUpdater(rws io.ReadWriteSeeker) (*Updater, error) {
+	size, err := rws.Seek(0, io.SeekEnd)
+	if err != nil {
+		return nil, err
 	}
 	zu := &Updater{
 		rw: newSectionReaderWriter(rws),
 	}
-	var err error
 	if err = zu.init(size); err != nil && err != ErrInsecurePath {
 		return nil, err
 	}

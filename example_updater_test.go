@@ -59,9 +59,7 @@ func Test_Updater(t *testing.T) {
 	// Reopen test.zip archive with read/write only mode for Updater.
 	f, err = os.OpenFile("test.zip", os.O_RDWR, 0)
 	handleErr(err)
-	fi, err := f.Stat()
-	handleErr(err)
-	zu, err := zip.NewUpdater(f, fi.Size())
+	zu, err := zip.NewUpdater(f)
 	handleErr(err)
 
 	// Modift the zip comment
@@ -84,9 +82,7 @@ func Test_Updater(t *testing.T) {
 	// Re-open test zip archive.
 	f, err = os.OpenFile("test.zip", os.O_RDWR, 0)
 	handleErr(err)
-	fi, err = f.Stat()
-	handleErr(err)
-	zu, err = zip.NewUpdater(f, fi.Size())
+	zu, err = zip.NewUpdater(f)
 	handleErr(err)
 
 	dir = zu.Directory()
