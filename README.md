@@ -14,9 +14,7 @@ import "github.com/STARRY-S/zip"
 // Open an existing test.zip archive with read/write only mode for Updater.
 f, err := os.OpenFile("test.zip", os.O_RDWR, 0)
 handleErr(err)
-fi, err := f.Stat()
-handleErr(err)
-zu, err := zip.NewUpdater(f, fi.Size())
+zu, err := zip.NewUpdater(f)
 handleErr(err)
 defer zu.Close()
 
