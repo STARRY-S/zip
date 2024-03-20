@@ -233,7 +233,8 @@ func (u *Updater) prepare(fh *FileHeader, offset int64) error {
 // The caller must not modify fh after calling CreateHeader.
 //
 // If the offset is less than 0, data will be appended after the last file
-// in the zip archive.
+// in the zip archive. If the file already exists, it will be replaced with the
+// new data.
 //
 // It should be noted that the size of the newly appended file should be larger
 // than the size of the existing file. Especially when using the Deflate
@@ -244,19 +245,75 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 		return nil, err
 	}
 
-	if offset < 0 {
-		offset = u.dirOffset
-	}
 	// Offset should match existing header offsets or equal to directory offset.
 	var offsetExists bool
-	for i, h := range u.dir {
-		if h.offset == uint64(offset) {
-			offsetExists = true
-			// Delete the corresponding header.
-			u.dir = append(u.dir[:i], u.dir[i+1:]...)
-			break
+
+	existingFileIndex := 0
+	if offset < 0 {
+		// Append the file to the zip or replace the existing one
+		for i, h := range u.dir {
+			if h.FileHeader.Name == fh.Name {
+				offset = int64(h.offset)
+				existingFileIndex = i
+				break
+			}
+		}
+
+		// File does not exist inside the zip, so we append it
+		if existingFileIndex == 0 {
+			offset = u.dirOffset
+		}
+	} else {
+		// This is for manually writing data into a certain offset
+		for i, h := range u.dir {
+			if h.offset == uint64(offset) {
+				offsetExists = true
+				// Delete the corresponding header.
+				u.dir = append(u.dir[:i], u.dir[i+1:]...)
+				break
+			}
 		}
 	}
+
+	if existingFileIndex > 0 {
+		// If the file exists and is not the last one in the file, we will remove it
+		// and reinsert it at the end of the file.
+		// The existing files data will be relocated first to use the leftover space.
+		if existingFileIndex+1 < len(u.dir) {
+			nextOffset := u.dir[existingFileIndex+1].offset
+
+			// Read the existing files data
+			remainingDataSize := u.dirOffset - int64(nextOffset)
+			data := make([]byte, remainingDataSize)
+			_, err := u.rw.ReadAt(data, int64(nextOffset))
+			if err != nil {
+				return nil, err
+			}
+
+			// Rewind the ReadWriter offset to the one of the file to be deleted
+			_, err = u.rw.Seek(int64(u.dir[existingFileIndex].offset), io.SeekStart)
+			if err != nil {
+				return nil, err
+			}
+
+			// Write the data we read earlier onto its new destination
+			u.rw.Write(data)
+
+			// Update the file offsets in their headers
+			deletedDataSize := nextOffset - u.dir[existingFileIndex].offset
+			for i := existingFileIndex; i < len(u.dir); i++ {
+				h := u.dir[i]
+
+				h.offset = h.offset - uint64(deletedDataSize)
+			}
+		}
+
+		offset = u.dirOffset
+
+		// Delete the header of the existing file that will be replaced
+		u.dir = append(u.dir[:existingFileIndex], u.dir[existingFileIndex+1:]...)
+	}
+
 	if !offsetExists && offset != u.dirOffset {
 		return nil, errors.New("archive/zip: invalid header offset provided")
 	}
