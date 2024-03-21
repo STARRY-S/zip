@@ -280,7 +280,7 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 		// and reinsert it at the end of the file.
 		// The existing files data will be relocated first to use the leftover space.
 
-		// This diagram shows the internal structure of a zip file, whose i-nth file
+		// This diagram shows the internal structure of a zip file, whose i-th file
 		// we want to overwrite. The annotations represent some of the variables that
 		// are used to implement this feature.
 		//
