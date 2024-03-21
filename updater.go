@@ -279,7 +279,27 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 		// If the file exists and is not the last one in the file, we will remove it
 		// and reinsert it at the end of the file.
 		// The existing files data will be relocated first to use the leftover space.
+
+		// This diagram shows the internal structure of a zip file, whose i-nth file
+		// we want to overwrite. The annotations represent some of the variables that
+		// are used to implement this feature.
+		//
+		//                       deletedDataSize = nextOffset - existingFileOffset
+		//                      ┌────────────────┐
+		//                      │                │ remainingDataSize
+		//                      │                │────────────────────┐
+		//                      ▼                ▼                    ▼
+		// ┌───┬────────────┬───┬───┬────────────┬───┬────────────┬───┬───────┐
+		// │   │            │   │   │            │   │            │   │░░░░░░░│
+		// │h_0│   File 0   │...│h_i│   File i   │h_ │  File i+1  │...│░░Dir░░│
+		// │   │    data    │   │   │    data    │i+1│    data    │   │░░░░░░░│
+		// │   │            │   │   │            │   │            │   │░░░░░░░│
+		// └───┴────────────┴───┴───┴────────────┴───┴────────────┴───┴───────┘
+		//                      ▲                ▲                    ▲
+		//                      │                │                    │
+		//                   existingFileOffset  nextOffset           Dir Offset
 		if existingFileIndex+1 < len(u.dir) {
+			existingFileOffset := u.dir[existingFileIndex].offset
 			nextOffset := u.dir[existingFileIndex+1].offset
 
 			// Read the existing files data
@@ -299,8 +319,8 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 			// Write the data we read earlier onto its new destination
 			u.rw.Write(data)
 
-			// Update the file offsets in their headers
-			deletedDataSize := nextOffset - u.dir[existingFileIndex].offset
+			// Update the file offsets in their headers, to match their new positions
+			deletedDataSize := nextOffset - existingFileOffset
 			for i := existingFileIndex; i < len(u.dir); i++ {
 				h := u.dir[i]
 
@@ -312,6 +332,19 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 
 		// Delete the header of the existing file that will be replaced
 		u.dir = append(u.dir[:existingFileIndex], u.dir[existingFileIndex+1:]...)
+
+		// After these operations the zip archive will look like this, and the new file
+		// will be appended after the last one.
+		//
+		// ┌───┬────────────┬───┬───┬────────────┬───┬───────┐
+		// │   │            │   │   │            │   │░░░░░░░│
+		// │h_0│   File 0   │...│h_ │  File i+1  │...│░░Dir░░│
+		// │   │    data    │   │i+1│    data    │   │░░░░░░░│
+		// │   │            │   │   │            │   │░░░░░░░│
+		// └───┴────────────┴───┴───┴────────────┴───┴───────┘
+		//                      ▲
+		//                      │
+		//                      offset_i+1 = offset_i+1 - deletedDataSize
 	}
 
 	if !offsetExists && offset != u.dirOffset {
