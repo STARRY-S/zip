@@ -260,7 +260,7 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 		}
 
 		// File does not exist inside the zip, so we append it
-		if existingFileIndex >= 0 {
+		if existingFileIndex < 0 {
 			offset = u.dirOffset
 		}
 	} else {
@@ -275,7 +275,7 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 		}
 	}
 
-	if existingFileIndex > 0 {
+	if existingFileIndex >= 0 {
 		// If the file exists and is not the last one in the file, we will remove it
 		// and reinsert it at the end of the file.
 		// The existing files data will be relocated first to use the leftover space.
