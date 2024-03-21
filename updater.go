@@ -311,7 +311,7 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 			}
 
 			// Rewind the ReadWriter offset to the one of the file to be deleted
-			_, err = u.rw.Seek(int64(u.dir[existingFileIndex].offset), io.SeekStart)
+			_, err = u.rw.Seek(int64(existingFileOffset), io.SeekStart)
 			if err != nil {
 				return nil, err
 			}
