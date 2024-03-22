@@ -287,7 +287,7 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 		//                       deletedDataSize = nextOffset - existingFileOffset
 		//                      ┌────────────────┐
 		//                      │                │ remainingDataSize
-		//                      │                │────────────────────┐
+		//                      │                ├────────────────────┐
 		//                      ▼                ▼                    ▼
 		// ┌───┬────────────┬───┬───┬────────────┬───┬────────────┬───┬───────┐
 		// │   │            │   │   │            │   │            │   │░░░░░░░│
@@ -299,32 +299,36 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 		//                      │                │                    │
 		//                   existingFileOffset  nextOffset           Dir Offset
 		if existingFileIndex+1 < len(u.dir) {
-			existingFileOffset := u.dir[existingFileIndex].offset
-			nextOffset := u.dir[existingFileIndex+1].offset
+			deletedDataSize := u.dir[existingFileIndex+1].offset - u.dir[existingFileIndex].offset
+			filesInZip := len(u.dir)
 
-			// Read the existing files data
-			remainingDataSize := u.dirOffset - int64(nextOffset)
-			data := make([]byte, remainingDataSize)
-			_, err := u.rw.ReadAt(data, int64(nextOffset))
-			if err != nil {
-				return nil, err
-			}
+			for i := existingFileIndex + 1; i < filesInZip; i++ {
+				var nextOffset uint64
+				if i+1 < filesInZip {
+					nextOffset = u.dir[i+1].offset
+				} else {
+					nextOffset = uint64(u.dirOffset)
+				}
 
-			// Rewind the ReadWriter offset to the one of the file to be deleted
-			_, err = u.rw.Seek(int64(existingFileOffset), io.SeekStart)
-			if err != nil {
-				return nil, err
-			}
+				// Read the ith-file data
+				dataSize := nextOffset - u.dir[i].offset
+				data := make([]byte, dataSize)
+				_, err := u.rw.ReadAt(data, int64(u.dir[i].offset))
+				if err != nil {
+					return nil, err
+				}
 
-			// Write the data we read earlier onto its new destination
-			u.rw.Write(data)
+				// Rewind the ReadWriter offset a number of bytes equal to the size of the deleted data
+				_, err = u.rw.Seek(int64(u.dir[i].offset-deletedDataSize), io.SeekStart)
+				if err != nil {
+					return nil, err
+				}
 
-			// Update the file offsets in their headers, to match their new positions
-			deletedDataSize := nextOffset - existingFileOffset
-			for i := existingFileIndex; i < len(u.dir); i++ {
-				h := u.dir[i]
+				// Write the data we read earlier onto its new destination
+				u.rw.Write(data)
 
-				h.offset = h.offset - uint64(deletedDataSize)
+				// Update the file offsets in their headers, to match their new positions
+				u.dir[i].offset = u.dir[i].offset - uint64(deletedDataSize)
 			}
 		}
 
