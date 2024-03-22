@@ -1,8 +1,10 @@
 package zip_test
 
 import (
+	"fmt"
 	"io"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/STARRY-S/zip"
@@ -28,6 +30,14 @@ func append(u *zip.Updater, name string) {
 	handleErr(err)
 	defer f.Close()
 	_, err = io.Copy(w, f)
+	handleErr(err)
+}
+
+func appendWithString(u *zip.Updater, name, content string) {
+	w, err := u.Append(name)
+	handleErr(err)
+
+	_, err = fmt.Fprint(w, content)
 	handleErr(err)
 }
 
@@ -88,6 +98,13 @@ func Test_Updater(t *testing.T) {
 	dir = zu.Directory()
 	ls(t, dir)
 
+	// Insert a file we will modify later
+	testFileName := "test.txt"
+	testFileInitialContent := "this is a test"
+	testFileFinalContent := "now it should be modified to be a longer line of text to show that it can be replaced safely"
+	appendWithString(zu, testFileName, testFileInitialContent)
+	t.Logf("append %q into test.zip with content %q", testFileName, testFileInitialContent)
+
 	// Append multiple new files into existing archive file.
 	for _, n := range []string{
 		"reader.go",
@@ -123,6 +140,9 @@ func Test_Updater(t *testing.T) {
 	dir = zu.Directory()
 	ls(t, dir)
 
+	// Modify the test file we inserted earlier to something longer
+	appendWithString(zu, testFileName, testFileFinalContent)
+
 	zu.Close()
 
 	// Finally, re-open the zip archive by Reader to validate.
@@ -140,6 +160,26 @@ func Test_Updater(t *testing.T) {
 		handleErr(err)
 		t.Logf("content (pre 30 Bytes): %v...n", string(buf))
 	}
+
+	for _, f := range zr.File {
+		if f.Name == testFileName {
+			rc, err := f.Open()
+			handleErr(err)
+
+			testFileBuf := new(strings.Builder)
+			_, err = io.Copy(testFileBuf, rc)
+			handleErr(err)
+
+			testFileContent := testFileBuf.String()
+
+			if testFileContent != testFileFinalContent {
+				t.Errorf("%q content is: %q != %q", testFileName, testFileContent, testFileFinalContent)
+			}
+
+			t.Logf("%q content is: %q", testFileName, testFileContent)
+		}
+	}
+
 	zr.Close()
 
 	// Clean-up test zip file.
