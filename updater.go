@@ -286,9 +286,7 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 		//
 		//                       deletedDataSize = nextOffset - existingFileOffset
 		//                      ┌────────────────┐
-		//                      │                │ remainingDataSize
-		//                      │                ├────────────────────┐
-		//                      ▼                ▼                    ▼
+		//                      ▼                ▼
 		// ┌───┬────────────┬───┬───┬────────────┬───┬────────────┬───┬───────┐
 		// │   │            │   │   │            │   │            │   │░░░░░░░│
 		// │h_0│   File 0   │...│h_i│   File i   │h_ │  File i+1  │...│░░Dir░░│
