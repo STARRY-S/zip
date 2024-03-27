@@ -328,6 +328,9 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 				// Update the file offsets in their headers, to match their new positions
 				u.dir[i].offset = u.dir[i].offset - uint64(deletedDataSize)
 			}
+
+			// The dir offset also has to be reduced by the deleted data size
+			u.dirOffset = u.dirOffset - int64(deletedDataSize)
 		}
 
 		offset = u.dirOffset
