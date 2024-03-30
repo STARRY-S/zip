@@ -295,33 +295,53 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 		// └───┴────────────┴───┴───┴────────────┴───┴────────────┴───┴───────┘
 		//                      ▲                ▲                    ▲
 		//                      │                │                    │
-		//                   existingFileOffset  nextOffset           Dir Offset
+		//                   existingFileOffset  nextFileOffset       Dir Offset
 		if existingFileIndex+1 < len(u.dir) {
-			deletedDataSize := u.dir[existingFileIndex+1].offset - u.dir[existingFileIndex].offset
+			existingFileOffset := u.dir[existingFileIndex].offset
+			nextFileOffset := u.dir[existingFileIndex+1].offset
+
+			deletedDataSize := nextFileOffset - existingFileOffset
 			filesInZip := len(u.dir)
 
+			size := 10 * 1024
+			buf := make([]byte, size)
+
+			readOffset := int64(nextFileOffset)
+
+			var err error
+
+			for {
+				nr, er := u.rw.ReadAt(buf, readOffset)
+				if nr > 0 {
+					writeOffset := readOffset - int64(deletedDataSize)
+
+					nw, ew := u.rw.WriteAt(buf[0:nr], writeOffset)
+					if nw < 0 || nr < nw {
+						nw = 0
+					}
+					readOffset += int64(nw)
+					if ew != nil {
+						err = ew
+						break
+					}
+					if nr != nw {
+						err = io.ErrShortWrite
+						break
+					}
+				}
+				if er != nil {
+					if er != io.EOF {
+						err = er
+					}
+					break
+				}
+			}
+
+			if err != nil {
+				return nil, err
+			}
+
 			for i := existingFileIndex + 1; i < filesInZip; i++ {
-				var nextOffset uint64
-				if i+1 < filesInZip {
-					nextOffset = u.dir[i+1].offset
-				} else {
-					nextOffset = uint64(u.dirOffset)
-				}
-
-				// Read the ith-file data
-				dataSize := nextOffset - u.dir[i].offset
-				data := make([]byte, dataSize)
-				_, err := u.rw.ReadAt(data, int64(u.dir[i].offset))
-				if err != nil {
-					return nil, err
-				}
-
-				// Rewind the existing data a number of bytes equal to the size of the deleted data
-				_, err = u.rw.WriteAt(data, int64(u.dir[i].offset-deletedDataSize))
-				if err != nil {
-					return nil, err
-				}
-
 				// Update the file offsets in their headers, to match their new positions
 				u.dir[i].offset = u.dir[i].offset - uint64(deletedDataSize)
 			}
