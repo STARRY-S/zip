@@ -316,14 +316,11 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 					return nil, err
 				}
 
-				// Rewind the ReadWriter offset a number of bytes equal to the size of the deleted data
-				_, err = u.rw.Seek(int64(u.dir[i].offset-deletedDataSize), io.SeekStart)
+				// Rewind the existing data a number of bytes equal to the size of the deleted data
+				_, err = u.rw.WriteAt(data, int64(u.dir[i].offset-deletedDataSize))
 				if err != nil {
 					return nil, err
 				}
-
-				// Write the data we read earlier onto its new destination
-				u.rw.Write(data)
 
 				// Update the file offsets in their headers, to match their new positions
 				u.dir[i].offset = u.dir[i].offset - uint64(deletedDataSize)
