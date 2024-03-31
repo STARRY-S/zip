@@ -316,8 +316,7 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 	}
 
 	if existingFileIndex >= 0 {
-		// If the file exists and is not the last one in the file, we will remove it
-		// and reinsert it at the end of the file.
+		// If the file exists we will remove it and reinsert it at the end of the file.
 		// The existing files data will be relocated first to use the leftover space.
 
 		// This diagram shows the internal structure of a zip file, whose i-th file
@@ -336,11 +335,14 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 		//                      ▲                ▲                    ▲
 		//                      │                │                    │
 		//                   existingFileOffset  nextFileOffset       Dir Offset
+
+		existingFileOffset := u.dir[existingFileIndex].offset
+		var deletedDataSize uint64
+
 		if existingFileIndex+1 < len(u.dir) {
-			existingFileOffset := u.dir[existingFileIndex].offset
 			nextFileOffset := u.dir[existingFileIndex+1].offset
 
-			deletedDataSize := nextFileOffset - existingFileOffset
+			deletedDataSize = nextFileOffset - existingFileOffset
 			filesInZip := len(u.dir)
 
 			// Rewind the existing data by the deleted data size
@@ -353,11 +355,16 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 				// Update the file offsets in their headers, to match their new positions
 				u.dir[i].offset = u.dir[i].offset - uint64(deletedDataSize)
 			}
-
-			// The dir offset also has to be reduced by the deleted data size
-			u.dirOffset = u.dirOffset - int64(deletedDataSize)
+		} else {
+			// The file is the last one, so the data size will be the remaining bytes
+			// until the central directory
+			deletedDataSize = uint64(u.dirOffset) - existingFileOffset
 		}
 
+		// The dir offset also has to be reduced by the deleted data size
+		u.dirOffset = u.dirOffset - int64(deletedDataSize)
+
+		// Append the new file at the end
 		offset = u.dirOffset
 
 		// Delete the header of the existing file that will be replaced
