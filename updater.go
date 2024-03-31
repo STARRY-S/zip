@@ -227,6 +227,46 @@ func (u *Updater) prepare(fh *FileHeader, offset int64) error {
 	return nil
 }
 
+// rewindData moves data back starting at an offset by a certain amount
+func (u *Updater) rewindData(atOffset, by int64) error {
+	// Rewind the data in blocks of 10 KB
+	blockSize := 10 * 1024
+	buf := make([]byte, blockSize)
+
+	readOffset := int64(atOffset)
+
+	var err error
+
+	for {
+		nr, er := u.rw.ReadAt(buf, readOffset)
+		if nr > 0 {
+			writeOffset := readOffset - int64(by)
+
+			nw, ew := u.rw.WriteAt(buf[0:nr], writeOffset)
+			if nw < 0 || nr < nw {
+				nw = 0
+			}
+			readOffset += int64(nw)
+			if ew != nil {
+				err = ew
+				break
+			}
+			if nr != nw {
+				err = io.ErrShortWrite
+				break
+			}
+		}
+		if er != nil {
+			if er != io.EOF {
+				err = er
+			}
+			break
+		}
+	}
+
+	return err
+}
+
 // AppendHeaderAt adds a file to the zip archive using the provided FileHeader
 // for the file metadata to the specific offset.
 // Writer takes ownership of fh and may mutate its fields.
@@ -303,40 +343,8 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 			deletedDataSize := nextFileOffset - existingFileOffset
 			filesInZip := len(u.dir)
 
-			size := 10 * 1024
-			buf := make([]byte, size)
-
-			readOffset := int64(nextFileOffset)
-
-			var err error
-
-			for {
-				nr, er := u.rw.ReadAt(buf, readOffset)
-				if nr > 0 {
-					writeOffset := readOffset - int64(deletedDataSize)
-
-					nw, ew := u.rw.WriteAt(buf[0:nr], writeOffset)
-					if nw < 0 || nr < nw {
-						nw = 0
-					}
-					readOffset += int64(nw)
-					if ew != nil {
-						err = ew
-						break
-					}
-					if nr != nw {
-						err = io.ErrShortWrite
-						break
-					}
-				}
-				if er != nil {
-					if er != io.EOF {
-						err = er
-					}
-					break
-				}
-			}
-
+			// Rewind the existing data by the deleted data size
+			err := u.rewindData(int64(existingFileOffset), int64(deletedDataSize))
 			if err != nil {
 				return nil, err
 			}
