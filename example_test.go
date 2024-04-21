@@ -1,11 +1,9 @@
-package zip_test
+package zip
 
 import (
 	"io"
 	"os"
 	"testing"
-
-	"github.com/STARRY-S/zip"
 )
 
 func handleErr(err error) {
@@ -14,14 +12,14 @@ func handleErr(err error) {
 	}
 }
 
-func ls(t *testing.T, dir []zip.Directory) {
+func ls(t *testing.T, dir []Directory) {
 	for _, d := range dir {
 		t.Logf("%s offset(%v) %s",
 			d.Mode().String(), d.HeaderOffset(), d.Name)
 	}
 }
 
-func append(u *zip.Updater, name string) {
+func appendFile(u *Updater, name string) {
 	w, err := u.Append(name)
 	handleErr(err)
 	f, err := os.Open(name)
@@ -35,7 +33,7 @@ func Test_Updater(t *testing.T) {
 	// Create a new zip file.
 	f, err := os.Create("test.zip")
 	handleErr(err)
-	zw := zip.NewWriter(f)
+	zw := NewWriter(f)
 	w, err := zw.Create("LICENSE")
 	handleErr(err)
 	t.Log("create test.zip")
@@ -59,7 +57,7 @@ func Test_Updater(t *testing.T) {
 	// Reopen test.zip archive with read/write only mode for Updater.
 	f, err = os.OpenFile("test.zip", os.O_RDWR, 0)
 	handleErr(err)
-	zu, err := zip.NewUpdater(f)
+	zu, err := NewUpdater(f)
 	handleErr(err)
 
 	// Modift the zip comment
@@ -71,8 +69,8 @@ func Test_Updater(t *testing.T) {
 	ls(t, dir)
 
 	// Append one new file into existing zip archive.
-	append(zu, "struct.go")
-	t.Log("append struct.go into test.zip")
+	appendFile(zu, "struct.go")
+	t.Log("appendFile struct.go into test.zip")
 	t.Log("---------------------")
 
 	// Close Updater and file
@@ -82,7 +80,7 @@ func Test_Updater(t *testing.T) {
 	// Re-open test zip archive.
 	f, err = os.OpenFile("test.zip", os.O_RDWR, 0)
 	handleErr(err)
-	zu, err = zip.NewUpdater(f)
+	zu, err = NewUpdater(f)
 	handleErr(err)
 
 	dir = zu.Directory()
@@ -94,8 +92,8 @@ func Test_Updater(t *testing.T) {
 		"register.go",
 		".gitignore",
 	} {
-		append(zu, n)
-		t.Logf("append %q into test.zip", n)
+		appendFile(zu, n)
+		t.Logf("appendFile %q into test.zip", n)
 	}
 	t.Log("---------------------")
 	dir = zu.Directory()
@@ -126,7 +124,7 @@ func Test_Updater(t *testing.T) {
 	zu.Close()
 
 	// Finally, re-open the zip archive by Reader to validate.
-	zr, err := zip.OpenReader("test.zip")
+	zr, err := OpenReader("test.zip")
 	handleErr(err)
 
 	t.Logf("modified zip archive comment: %v", zr.Comment)

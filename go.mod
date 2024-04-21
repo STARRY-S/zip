@@ -1,3 +1,3 @@
 module github.com/STARRY-S/zip
 
-go 1.21.3
+go 1.22.2
