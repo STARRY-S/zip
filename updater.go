@@ -2,14 +2,32 @@ package zip
 
 import (
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
-// sectionReaderWriter implements io.Reader, io.Writer, io.Seeker, io.ReaderAt,
-// io.WriterAt interfaces based on io.ReadWriteSeeker.
+const bufferSize = 1 << 20 // 1M
+
+// AppendMode specifies the way to append new file to existing zip archive.
+type AppendMode int
+
+const (
+	// ZIP_APPEND_OVERWRITE removes the existing file data and append the new
+	// data to the end of the zip archive.
+	APPEND_MODE_OVERWRITE AppendMode = iota
+
+	// ZIP_APPEND_KEEP_ORIGINAL will keep the original file data and only
+	// write the new file data at the end of the existing zip archive file.
+	// This mode will keep multiple file with same name into one archive file.
+	APPEND_MODE_KEEP_ORIGINAL
+)
+
+// sectionReaderWriter implements [io.Reader], [io.Writer], [io.Seeker],
+// [io.ReaderAt], [io.WriterAt] interfaces based on [io.ReadWriteSeeker].
 type sectionReaderWriter struct {
 	rws io.ReadWriteSeeker
 }
@@ -85,12 +103,13 @@ type Updater struct {
 	// Some JAR files are zip files with a prefix that is a bash script.
 	// The baseOffset field is the start of the zip file proper.
 	baseOffset int64
-
+	// dirOffset is the offset to write the directory record.
+	// Note that the dirOffset may not equal to the last file data end offset.
 	dirOffset int64
 }
 
-// NewReader returns a new Updater from io.ReadWriteSeeker, which is assumed to
-// have the given size in bytes.
+// NewUpdater returns a new Updater from [io.ReadWriteSeeker], which is
+// assumed to have the given size in bytes.
 func NewUpdater(rws io.ReadWriteSeeker) (*Updater, error) {
 	size, err := rws.Seek(0, io.SeekEnd)
 	if err != nil {
@@ -151,6 +170,9 @@ func (u *Updater) init(size int64) error {
 		// the wrong number of directory entries.
 		return err
 	}
+
+	// Ensure the directory record is ordered by file header offset.
+	slices.SortFunc(u.dir, sortDirectoryFunc)
 	for _, d := range u.dir {
 		if d.Name == "" {
 			// Zip permits an empty file name field.
@@ -165,60 +187,44 @@ func (u *Updater) init(size int64) error {
 	return nil
 }
 
-func (u *Updater) Directory() []Directory {
-	dir := make([]Directory, 0, len(u.dir))
-	for _, d := range u.dir {
-		dir = append(dir, Directory{
-			FileHeader: *d.FileHeader,
-			offset:     int64(d.offset),
-		})
-	}
-	return dir
-}
-
 // Append adds a file to the zip file using the provided name.
-// It returns a Writer to which the file contents should be written.
+// It returns a [Writer] to which the file contents should be written.
 // The file contents will be compressed using the Deflate method.
 // The name must be a relative path: it must not start with a drive
 // letter (e.g. C:) or leading slash, and only forward slashes are
 // allowed. To create a directory instead of a file, add a trailing
 // slash to the name.
+//
+// If mode is set to [APPEND_MODE_OVERWRITE], and file name already exists
+// in the zip archive, Append will delete the existing file data and write the
+// new file data at the end of the zip file.
+//
+// If mode is set to [APPEND_MODE_KEEP_ORIGINAL], the existing data won't be
+// deleted from the zip file and Append only write the file data with the same
+// file name at the end of the zip file.
+//
 // The file's contents must be written to the io.Writer before the next
-// call to Append, AppendHeader, or Close.
-func (u *Updater) Append(name string) (io.Writer, error) {
+// call to [Append], [AppendHeader], or [Close].
+func (u *Updater) Append(name string, mode AppendMode) (io.Writer, error) {
 	h := &FileHeader{
 		Name:   name,
 		Method: Deflate,
 	}
-	return u.AppendHeaderAt(h, -1)
+	return u.AppendHeader(h, mode)
 }
 
-// AppendAt adds a file to the zip file to specific offset.
-// If the offset is less than 0, data will be appended after the last file
-// in the zip archive.
-// It should be noted that the size of the newly appended file should be larger
-// than the size of the existing file.
-// Especially when using the Deflate compression method, the compressed
-// data size should be larger than the original file data size.
-func (u *Updater) AppendAt(name string, offset int64) (io.Writer, error) {
-	h := &FileHeader{
-		Name:   name,
-		Method: Deflate,
-	}
-	return u.AppendHeaderAt(h, offset)
-}
-
-func (u *Updater) prepare(fh *FileHeader, offset int64) error {
+func (u *Updater) prepare(fh *FileHeader) error {
 	if u.last != nil && !u.last.closed {
 		if err := u.last.close(); err != nil {
 			return err
 		}
-		// update the dirOffset
-		dirOffset, err := u.rw.offset()
+		offset, err := u.rw.offset()
 		if err != nil {
 			return err
 		}
-		u.dirOffset = dirOffset
+		if u.dirOffset < offset {
+			u.dirOffset = offset
+		}
 	}
 	if len(u.dir) > 0 && u.dir[len(u.dir)-1].FileHeader == fh {
 		// See https://golang.org/issue/11144 confusion.
@@ -227,43 +233,47 @@ func (u *Updater) prepare(fh *FileHeader, offset int64) error {
 	return nil
 }
 
-// AppendHeaderAt adds a file to the zip archive using the provided FileHeader
+// AppendHeader adds a file to the zip archive using the provided [FileHeader]
 // for the file metadata to the specific offset.
 // Writer takes ownership of fh and may mutate its fields.
 // The caller must not modify fh after calling CreateHeader.
 //
-// If the offset is less than 0, data will be appended after the last file
-// in the zip archive.
+// If the file name of the [FileHeader] already exists in the zip file,
+// AppendHeader will remove the existing file data and the new file data will
+// write at the end of the archive file.
 //
-// It should be noted that the size of the newly appended file should be larger
-// than the size of the existing file. Especially when using the Deflate
+// It should be noted that the size of the newly appended file size should be
+// larger than the size of the replaced file. Especially when using the Deflate
 // compression method, the compressed data size should be larger than the
 // original file data size.
-func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error) {
-	if err := u.prepare(fh, offset); err != nil {
+func (u *Updater) AppendHeader(fh *FileHeader, mode AppendMode) (io.Writer, error) {
+	if err := u.prepare(fh); err != nil {
 		return nil, err
 	}
 
+	var err error
+	var offset int64 = -1
+	var existingDirIndex int = -1
+	if mode == APPEND_MODE_OVERWRITE {
+		for i, d := range u.dir {
+			if d.Name == fh.Name {
+				offset = int64(d.offset)
+				existingDirIndex = i
+				break
+			}
+		}
+	}
 	if offset < 0 {
 		offset = u.dirOffset
 	}
-	// Offset should match existing header offsets or equal to directory offset.
-	var offsetExists bool
-	for i, h := range u.dir {
-		if h.offset == uint64(offset) {
-			offsetExists = true
-			// Delete the corresponding header.
-			u.dir = append(u.dir[:i], u.dir[i+1:]...)
-			break
+	if existingDirIndex >= 0 {
+		if offset, err = u.removeFile(existingDirIndex); err != nil {
+			return nil, err
 		}
-	}
-	if !offsetExists && offset != u.dirOffset {
-		return nil, errors.New("archive/zip: invalid header offset provided")
 	}
 
 	// Seek the file offset.
-	_, err := u.rw.Seek(offset, io.SeekStart)
-	if err != nil {
+	if _, err := u.rw.Seek(offset, io.SeekStart); err != nil {
 		return nil, err
 	}
 	u.offset = offset
@@ -369,17 +379,89 @@ func (u *Updater) AppendHeaderAt(fh *FileHeader, offset int64) (io.Writer, error
 		ow = fw
 	}
 	u.dir = append(u.dir, h)
+	// No need to re-sort u.dir here since the new created header is write
+	// to the end of the files.
 	if err := writeHeader(u.rw, h); err != nil {
 		return nil, err
 	}
 	// If we're creating a directory, fw is nil.
 	u.last = fw
-	u.dirOffset, err = u.rw.offset()
+	offset, err = u.rw.offset()
 	if err != nil {
 		return nil, err
 	}
+	if u.dirOffset < offset {
+		u.dirOffset = offset
+	}
 
 	return ow, nil
+}
+
+// removeFile removes file in zip by rewinding data and directory record.
+func (u *Updater) removeFile(dirIndex int) (int64, error) {
+	// start is the file header offset.
+	var start = int64(u.dir[dirIndex].offset)
+	// end is the next file header offset or directory offset.
+	var end int64
+	if dirIndex == len(u.dir)-1 {
+		end = u.dirOffset
+	} else {
+		end = int64(u.dir[dirIndex+1].offset)
+	}
+	// size is the file header and compressed data size.
+	var size = end - start
+
+	// Allocate buffer to rewind file data.
+	var buffSize int64
+	var buffer []byte
+	if size > bufferSize {
+		buffer = make([]byte, bufferSize)
+		buffSize = bufferSize
+	} else {
+		buffer = make([]byte, size)
+		buffSize = size
+	}
+
+	var rp int64 = end   // read point
+	var wp int64 = start // write point
+	// Rewind data in buffer size block.
+	for rp < u.dirOffset-buffSize {
+		n, err := u.rw.ReadAt(buffer, rp)
+		if err != nil {
+			return 0, fmt.Errorf("zip: rewind data: ReadAt: %w", err)
+		}
+		_, err = u.rw.WriteAt(buffer[:n], wp)
+		if err != nil {
+			return 0, fmt.Errorf("zip: rewind data: WriteAt: %w", err)
+		}
+		rp += int64(n)
+		wp += int64(n)
+	}
+	// Rewind remaining data that smaller than the buffer size block.
+	if rp < u.dirOffset {
+		n, err := u.rw.ReadAt(buffer[:u.dirOffset-rp], rp)
+		if err != nil {
+			return 0, fmt.Errorf("zip: rewind data: ReadAt: %w", err)
+		}
+		_, err = u.rw.WriteAt(buffer[:n], wp)
+		if err != nil {
+			return 0, fmt.Errorf("zip: rewind data: ReadAt: %w", err)
+		}
+		rp += int64(n)
+		wp += int64(n)
+		// assert: rewind data before directory record
+		if rp != u.dirOffset {
+			return 0, errors.New("zip: rewind data: read data before directory failed")
+		}
+	}
+	// Remove deleted file directory record.
+	u.dir = append(u.dir[:dirIndex], u.dir[dirIndex+1:len(u.dir)]...)
+	// Update the file header offset in directory record.
+	for i := dirIndex; i < len(u.dir); i++ {
+		u.dir[i].offset -= uint64(size)
+		u.dir[i].Extra = nil // Will re-generate zip64 extra data when calling
+	}
+	return wp, nil
 }
 
 func (u *Updater) compressor(method uint16) Compressor {
@@ -418,6 +500,39 @@ func (u *Updater) Close() error {
 	start, err := u.rw.offset()
 	if err != nil {
 		return err
+	}
+	if start < u.dirOffset {
+		// Make data to `\0` between the last file and the diretory record.
+		// NOTE: this step is not mandatory but will make the file data clean.
+		var buffSize int64
+		var buffer []byte
+		size := u.dirOffset - start
+		if u.dirOffset-start > bufferSize {
+			buffer = make([]byte, bufferSize)
+			buffSize = bufferSize
+		} else {
+			buffer = make([]byte, size)
+			buffSize = size
+		}
+		var wp = start
+		_, err = u.rw.Seek(wp, io.SeekStart)
+		if err != nil {
+			return err
+		}
+		// Write `\0` in block size.
+		for wp < u.dirOffset-buffSize {
+			n, err := u.rw.Write(buffer)
+			if err != nil {
+				return err
+			}
+			wp += int64(n)
+		}
+		if wp < u.dirOffset {
+			if _, err := u.rw.Write(buffer[:u.dirOffset-wp]); err != nil {
+				return err
+			}
+		}
+		start = u.dirOffset
 	}
 	for _, h := range u.dir {
 		var buf []byte = make([]byte, directoryHeaderLen)
@@ -534,4 +649,14 @@ func (u *Updater) Close() error {
 	}
 
 	return nil
+}
+
+func sortDirectoryFunc(a, b *header) int {
+	switch {
+	case a.offset > b.offset:
+		return 1
+	case a.offset < b.offset:
+		return -1
+	}
+	return 0
 }
