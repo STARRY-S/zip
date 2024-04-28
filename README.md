@@ -1,7 +1,7 @@
 Go zip library
 ==============
 
-This project is based on the [archive/zip](https://github.com/golang/go/tree/master/src/archive/zip) Go standard library to add a `Updater` struct to allow appending new files to the existing zip archive without decompress the whole file.
+This project is based on the [archive/zip](https://github.com/golang/go/tree/master/src/archive/zip) Go standard library. It adds a new `Updater` struct that allows appending new files to the existing zip archive without having to decompress the whole file, and allows overwriting of files already stored in the zip archive.
 
 Usage
 -----
@@ -31,7 +31,7 @@ _, err = w.Write([]byte("hello world"))
 handleErr(err)
 ```
 
-The completed example test code: [example_updater_test.go](./example_updater_test.go).
+Example test code: [updater_example_test.go](./updater_example_test.go).
 
 License
 -------
