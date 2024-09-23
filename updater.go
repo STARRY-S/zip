@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const bufferSize = 1 << 20 // 1M
+const bufferSize int64 = 1 << 20 // 1M
 
 // AppendMode specifies the way to append new file to existing zip archive.
 type AppendMode int
@@ -412,20 +412,11 @@ func (u *Updater) removeFile(dirIndex int) (int64, error) {
 	var size = end - start
 
 	// Allocate buffer to rewind file data.
-	var buffSize int64
-	var buffer []byte
-	if size > bufferSize {
-		buffer = make([]byte, bufferSize)
-		buffSize = bufferSize
-	} else {
-		buffer = make([]byte, size)
-		buffSize = size
-	}
-
+	var buffer = make([]byte, bufferSize)
 	var rp int64 = end   // read point
 	var wp int64 = start // write point
 	// Rewind data in buffer size block.
-	for rp < u.dirOffset-buffSize {
+	for rp < u.dirOffset-bufferSize {
 		n, err := u.rw.ReadAt(buffer, rp)
 		if err != nil {
 			return 0, fmt.Errorf("zip: rewind data: ReadAt: %w", err)
