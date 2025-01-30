@@ -7,16 +7,12 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        go-version: [ '1.23.2' ]
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Go ${{ matrix.go-version }}
-        uses: actions/setup-go@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go-version }}
-      - name: Unit tests
+          go-version: '1.23.X'
+      - name: Unit test
         run: |
-          go version
-          go test -v ./...
+          go test -count=1 -v ./...

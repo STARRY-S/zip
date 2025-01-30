@@ -1,16 +1,14 @@
-Go zip library
-==============
+# Go zip library
 
-This project is based on the [archive/zip](https://github.com/golang/go/tree/master/src/archive/zip) Go standard library. It adds a new `Updater` struct that allows appending new files to the existing zip archive without having to decompress the whole file, and allows overwriting of files already stored in the zip archive.
+[![Test](https://github.com/STARRY-S/zip/actions/workflows/test.yml/badge.svg)](https://github.com/STARRY-S/zip/actions/workflows/test.yml)
 
-Usage
------
+This project is based on the [archive/zip](https://github.com/golang/go/tree/master/src/archive/zip) Go standard library. It adds a new [Updater](updater.go) that allows appending new files to the existing zip archive without having to decompress the entire-file and allows overwriting of existing files stored in the zip archive.
+
+## Usage
 
 ```go
 import "github.com/STARRY-S/zip"
-```
 
-```go
 // Open an existing test.zip archive with read/write only mode for Updater.
 f, err := os.OpenFile("test.zip", os.O_RDWR, 0)
 handleErr(err)
@@ -31,11 +29,10 @@ _, err = w.Write([]byte("hello world"))
 handleErr(err)
 ```
 
-Example test code: [updater_example_test.go](./updater_example_test.go).
+For more example usage, please refer to [updater_example_test.go](./updater_example_test.go).
 
-License
--------
+## License
 
 [BSD 3-Clause](LICENSE)
 
-The zip library is based on [Go standard library](https://github.com/golang/go).
+This zip library is based on the [Go standard library](https://github.com/golang/go).

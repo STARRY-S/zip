@@ -204,7 +204,7 @@ func (u *Updater) init(size int64) error {
 // file name at the end of the zip file.
 //
 // The file's contents must be written to the io.Writer before the next
-// call to [Append], [AppendHeader], or [Close].
+// call to [Updater.Append], [Updater.AppendHeader], or [Updater.Close].
 func (u *Updater) Append(name string, mode AppendMode) (io.Writer, error) {
 	h := &FileHeader{
 		Name:   name,
