@@ -508,12 +508,18 @@ func (u *Updater) Close() error {
 		// The directory record is not at the end of the file, re-write the
 		// directory record to ensure that the record is at the end of the file.
 		offset := fileEndOffset - currentOffset
-		u.dirOffset = start + offset
+		if start < u.dirOffset {
+			u.dirOffset += offset
+		} else {
+			u.dirOffset = start + offset
+		}
 		_, err = u.rw.Seek(start, io.SeekStart)
 		if err != nil {
 			return err
 		}
-		return u.writeDirectory(start)
+		if err = u.writeDirectory(start); err != nil {
+			return fmt.Errorf("zip: write directory: %w", err)
+		}
 	}
 	return nil
 }

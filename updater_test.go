@@ -476,3 +476,121 @@ func TestUpdateComment(t *testing.T) {
 		})
 	}
 }
+
+// Ensure the directory record is at the end of the zip file
+// https://github.com/STARRY-S/zip/issues/3
+func TestDirectorySizeShrinked(t *testing.T) {
+	const (
+		comment = "abcdeabcdeabcdeabcdeabcde"
+		data    = "1234567890"
+
+		newComment = "A"
+		newData    = "B"
+	)
+	// init a empty zip file
+	f, err := os.CreateTemp("", "test-*.zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := f.Close(); err != nil {
+			t.Error(err)
+		}
+		if err := os.Remove(f.Name()); err != nil {
+			t.Error(err)
+		}
+	}()
+	zw := NewWriter(f)
+	if err := zw.SetComment(comment); err != nil {
+		t.Fatalf("SetComment: unexpected error %v", err)
+	}
+	for i := range 10 {
+		name := fmt.Sprintf("%d.txt", i)
+		fw, err := zw.CreateHeader(&FileHeader{
+			Name:    name,
+			Comment: comment,
+			Method:  Store,
+		})
+		if err != nil {
+			t.Fatalf("failed to create header %q: %v", name, err)
+		}
+		if _, err := io.WriteString(fw, data); err != nil {
+			t.Fatalf("failed to write %q: %v", name, err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	zu, err := NewUpdater(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zu.SetComment(newComment)
+	for i := range 10 {
+		name := fmt.Sprintf("%d.txt", i)
+		fw, err := zu.AppendHeader(&FileHeader{
+			Name:    name,
+			Comment: newComment,
+		}, APPEND_MODE_OVERWRITE)
+		if err != nil {
+			t.Fatalf("failed to replace header %q: %v", name, err)
+		}
+		if _, err := io.WriteString(fw, newData); err != nil {
+			t.Fatalf("failed to replace %q: %v", name, err)
+		}
+	}
+	if err := zu.Close(); err != nil {
+		t.Fatal(err)
+	}
+	currentOffset, err := f.Seek(0, io.SeekCurrent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("offset after overwrite the directory record: %v\n", currentOffset)
+
+	size, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("file size: %v\n", size)
+	if size != currentOffset {
+		// Ensure the directory end offset is at the end of the zip file
+		t.Errorf("current offset is not at the end of the zip file\n")
+		t.Errorf("expected offset %v, actual %v", size, currentOffset)
+		zu.rw.Seek(currentOffset, io.SeekStart)
+		b, err := io.ReadAll(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Errorf("REMAINING DATA: %v\n", b)
+		t.Errorf("REMAINING DATA string: %v\n", string(b))
+		return
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	zr, err := NewReader(f, size)
+	if err != nil {
+		t.Fatalf("failed to create reader %q: %v", f.Name(), err)
+	}
+	if zr.Comment != newComment {
+		t.Fatalf("expected zip commend %q, actual %q", newComment, zr.Comment)
+	}
+	for _, f := range zr.File {
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatalf("failed to open file %q: %v", f.Name, err)
+		}
+		b, err := io.ReadAll(rc)
+		if err != nil {
+			t.Fatalf("failed to read file %q: %v", f.Name, err)
+		}
+		if string(b) != newData {
+			t.Fatalf("expected file %q data %q, actual %q",
+				f.Name, newData, string(b))
+		}
+		t.Logf("file %q passed", f.Name)
+		rc.Close()
+	}
+}
