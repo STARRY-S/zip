@@ -567,9 +567,6 @@ func TestDirectorySizeShrinked(t *testing.T) {
 		t.Errorf("REMAINING DATA string: %v\n", string(b))
 		return
 	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		t.Fatal(err)
-	}
 	zr, err := NewReader(f, size)
 	if err != nil {
 		t.Fatalf("failed to create reader %q: %v", f.Name(), err)
@@ -590,7 +587,7 @@ func TestDirectorySizeShrinked(t *testing.T) {
 			t.Fatalf("expected file %q data %q, actual %q",
 				f.Name, newData, string(b))
 		}
-		t.Logf("file %q passed", f.Name)
+		// t.Logf("file %q passed", f.Name)
 		rc.Close()
 	}
 }

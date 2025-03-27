@@ -21,8 +21,9 @@ err = zu.SetComment("Test update zip archive")
 handleErr(err)
 
 // Append a new file into existing archive.
+// Use [zip.APPEND_MODE_OVERWRITE] to overwrite if the file already exists.
 // The Append method will create a new io.Writer.
-w, err := zu.Append("example.txt")
+w, err := zu.Append("example.txt", zip.APPEND_MODE_OVERWRITE)
 handleErr(err)
 // Write data into writer.
 _, err = w.Write([]byte("hello world"))
