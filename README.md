@@ -1,6 +1,6 @@
 # Go zip library
 
-[![Test](https://github.com/STARRY-S/zip/actions/workflows/test.yml/badge.svg)](https://github.com/STARRY-S/zip/actions/workflows/test.yml)
+[![CI](https://github.com/STARRY-S/zip/actions/workflows/ci.yaml/badge.svg)](https://github.com/STARRY-S/zip/actions/workflows/ci.yaml)
 
 This project is based on the [archive/zip](https://github.com/golang/go/tree/master/src/archive/zip) Go standard library. It adds a new [Updater](updater.go) that allows appending new files to the existing zip archive without having to decompress the entire-file and allows overwriting of existing files stored in the zip archive.
 
